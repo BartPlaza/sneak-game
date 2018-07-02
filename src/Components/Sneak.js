@@ -1,10 +1,16 @@
 import React from 'react';
 import styles from './Sneak.css';
+import axios from 'axios';
+import Pusher from 'pusher-js';
 
 class Sneak extends React.Component {
     constructor(props) {
         super(props);
         this.state = {
+            socketId: null,
+            player_1: null,
+            player_2: null,
+            game_status: 'stopped',
             allowKeys: [{'code': 'ArrowRight', 'alias': 'r', 'direction': 'h'},
                 {'code': 'ArrowLeft', 'alias': 'l', 'direction': 'h'},
                 {'code': 'ArrowUp', 'alias': 'u', 'direction': 'v'},
@@ -16,8 +22,8 @@ class Sneak extends React.Component {
                 'y_end': 20
             },
             point: {
-                'c_x_pos': 3,
-                'c_y_pos': 3
+                'c_x_pos': 10,
+                'c_y_pos': 10
             },
             direction: 'r',
             sneak_1: {
@@ -28,20 +34,83 @@ class Sneak extends React.Component {
                     prev_c_x_pos: 4,
                     prev_c_y_pos: 3
                 },
-            }
+            },
+            sneak_2: null,
+            interval: null
         }
     }
 
     componentDidMount() {
-        setInterval(() => {
-            this.move();
-        }, 100);
+
         window.addEventListener('keydown', (e) => {
             this.changeDirection(e.code)
         });
-        setTimeout(() => {
-            this.placePoint();
-        }, 1500);
+
+        const pusher = new Pusher('bfd38bdadf2ce4d78439', {
+            cluster: 'eu',
+            encrypted: true
+        });
+
+        pusher.connection.bind('connected', () => {
+            this.setState({
+                'socketId': pusher.connection.socket_id
+            })
+        });
+
+        const channel = pusher.subscribe('sneak-move');
+
+        channel.bind('move', (data) => {
+            if (data.socketId !== this.state.socketId) {
+                this.setState({
+                    'sneak_2': data.sneak
+                });
+            }
+        });
+
+        channel.bind('point', (data) => {
+            console.log(data);
+            this.setState({
+                'point': data
+            });
+        });
+
+        channel.bind('player_1', (data) => {
+            console.log(data);
+            this.setState({
+                'player_1': data.player
+            });
+        });
+
+        channel.bind('player_2', (data) => {
+            console.log(data);
+            this.setState({
+                'player_2': data.player
+            });
+        });
+
+        channel.bind('game_status_changed', (data) => {
+            console.log(data);
+            this.setState({
+                'game_status': data.status
+            });
+        });
+
+    };
+
+    componentDidUpdate(){
+        let status = this.state.game_status;
+        if(status === 'started' && this.state.interval === null){
+            const interval = setInterval(() => {
+                this.move();
+            }, 200);
+            this.setState({
+                'interval': interval
+            });
+        }
+
+        if(status === 'stopped' && this.state.interval !== null){
+            this.stopGame();
+        }
     };
 
     move = () => {
@@ -76,6 +145,7 @@ class Sneak extends React.Component {
                     'sneak_1': sneak
                 })
             }
+            axios.post('http://localhost:5000/action', {'sneak': this.state.sneak_1, 'socketId': this.state.socketId});
         });
         let sneak = {...this.state.sneak_1};
         switch (direction) {
@@ -169,10 +239,49 @@ class Sneak extends React.Component {
         this.setState({
             'point': newPoint
         });
+        axios.post('http://localhost:5000/point', newPoint);
     };
 
     endGame = () => {
-        window.location.reload();
+        axios.post('http://localhost:5000/game_status_changed', {'status': 'stopped'});
+        this.stopGame();
+    };
+
+    startGame = () => {
+        this.setPlayer();
+        if (this.state.player_1 && this.state.player_2) {
+
+        }
+    };
+
+    setPlayer = () => {
+        if (this.state.player_1 === null) {
+            this.setState({
+                'player_1': 'player_1'
+            });
+            axios.post('http://localhost:5000/player_1', {'player': 'player_1'});
+        } else if (this.state.player_2 === null) {
+            this.setState({
+                'player_2': 'player_2'
+            });
+            axios.post('http://localhost:5000/player_2', {'player': 'player_2'})
+                .then(() => {
+                    this.setState({
+                        game_status: 'started'
+                    });
+                    axios.post('http://localhost:5000/game_status_changed', {'status': 'started'})
+                });
+        }
+    };
+
+    stopGame = () => {
+        clearInterval(this.state.interval);
+        this.setState({
+            'interval': null
+        });
+        setTimeout(()=>{
+            window.location.reload();
+        },2000);
     };
 
     render() {
@@ -201,8 +310,27 @@ class Sneak extends React.Component {
                                 }/>
                             )
                         })}
+                    {this.state.sneak_2 ? (
+                        Object.keys(this.state.sneak_2)
+                            .filter((key) => key !== 'modules')
+                            .map((module, index) => {
+                                let moduleName = this.state.sneak_2[module];
+                                return (
+                                    <div className="sneak-2" id={module} style={
+                                        {
+                                            'gridRowStart': moduleName.c_x_pos,
+                                            'gridRowEnd': moduleName.c_x_pos + 1,
+                                            'gridColumnStart': moduleName.c_y_pos,
+                                            'gridColumnEnd': moduleName.c_y_pos + 1
+                                        }
+                                    }/>
+                                )
+                            })
+                    ) : null}
                 </div>
+                <button onClick={this.startGame}>Start game</button>
                 <button onClick={this.addSnakeModule}>Add Module</button>
+                <button onClick={this.stopGame}>Stop game</button>
             </React.Fragment>
         )
     }
